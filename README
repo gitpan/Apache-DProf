@@ -1,0 +1,69 @@
+NAME
+    Apache::DProf - Hook Devel::DProf into mod_perl
+
+SYNOPSIS
+     #in httpd.conf
+     PerlModule Apache::DProf
+
+DESCRIPTION
+    The Apache::DProf module will run a Devel::DProf profiler inside each child server and write the *tmon.out* file in
+    the directory *$ServerRoot/logs/dprof/$$* when the child is shutdown. Next time the parent server pulls in
+    Apache::DProf (via soft or hard restart), the *$ServerRoot/logs/dprof* is cleaned out before new profiles are
+    written for the new children.
+
+WHY
+    It is possible to profile code run under mod_perl with only the Devel::DProf module available on CPAN. You must have
+    apache version 1.3b3 or higher. When the server is started, Devel::DProf installs an `END' block to write the
+    *tmon.out* file, which will be run when the server is shutdown. Here's how to start and stop a server with the
+    profiler enabled:
+
+     % setenv PERL5OPT -d:DProf
+     % httpd -X -d `pwd` &
+     ... make some requests to the server here ...
+     % kill `cat logs/httpd.pid`
+     % unsetenv PERL5OPT
+     % dprofpp
+
+    There are downsides to this approach:
+
+    - Setting and unsetting PERL5OPT is a pain.
+
+    - Server startup code will be profiled as well, which we are not really concerned with, we're interested in runtime
+    code, right?
+
+    - It will not work unless the server is run in non-forking `-X' mode
+
+    These limitations are due to the assumption by Devel::DProf that the code you are profiling is running under a
+    standard Perl binary (the one you run from the command line). `Devel::Dprof' relies on the Perl `-d' switch for
+    intialization of the Perl debugger, which happens inside `perl_parse()' function call. It also relies on Perl's
+    special `END' subroutines for termination when it writes the raw profile to *tmon.out*. Under the standard command
+    line Perl interpreter, these `END' blocks are run when the `perl_run()' function is called. Also, Devel::DProf will
+    not profile any code if it is inside a forked process. Each time you run a Perl script from the command line, the
+    `perl_parse()' and `perl_run()' functions are called, Devel::DProf works just fine this way.
+
+    Under mod_perl, the `perl_parse()' and `perl_run()' functions are called only once, when the parent server is
+    starting. Any `END' blocks encountered during server startup or outside of `Apache::Registry' scripts are suspended
+    and run when the server is shutdown via apache's child exit callback hook. The parent server only runs Perl startup
+    code, all request time code is run in the forked child processes. If you followed the previous paragraph, you should
+    be able to see, Devel::DProf does not fit into the mod_perl model too well. The Apache::DProf module exists to make
+    it fit without modifying the Devel::DProf module or Perl itself.
+
+    The Apache::DProf module also requires apache version 1.3b3 or higher and `PerlChildInitHandler' enabled. It is
+    configured simply by adding this line to your httpd.conf file:
+
+     PerlModule Apache::DProf
+
+    When the Apache::DProf module is pulled in by the parent server, it will push a `PerlChildInitHandler' via the
+    Apache push_handlers method. When a child server is starting the `Apache::DProf::handler' subroutine will called.
+    This handler will create a directory `dprof/$$' relative to ServerRoot where Devel::DProf will create it's
+    *tmon.out* file. Then, the handler will initialize the Perl debugger and pull in Devel::DProf who will then install
+    it's hooks into the debugger and start it's profile timer. The `END' subroutine installed by Devel::DProf will be
+    run when the child server is shutdown and the *$ServerRoot/dprof/$$/tmon.out* file will be generated and ready for
+    dprofpp.
+
+AUTHOR
+    Doug MacEachern
+
+SEE ALSO
+    Devel::DProf(3), mod_perl(3), Apache(3)
+
